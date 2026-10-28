@@ -13,6 +13,7 @@ from pathlib import Path
 
 from openpyxl.utils import get_column_letter
 
+from . import cache
 from . import sheets as sh
 from .fields import SOURCE_FIELDS, resolve_field_name
 from .sheets import as_text, is_blank, norm
@@ -349,14 +350,14 @@ NS_SKU_NAMES = SOURCE_FIELDS["sku"] + ["item name/number", "item name number", "
                                        "name"]
 
 
-def parse_ns_master(path: Path) -> dict:
-    t = sh.read_table(path, must_have=NS_SKU_NAMES)
-    c = t["columns"]
+NS_FIELDS = ["sku", "internal_id", "barcode", "vendor_sku", "name", "brand", "category", "status"]
+
+
+def _ns_columns(c: list[str]) -> dict | None:
     sku_c = _col(c, *SOURCE_FIELDS["sku"]) or _col(c, "item name/number", "item name number", "itemid", "item id",
                                                      "item number", "name")
     if not sku_c:
-        raise sh.SheetError("No SKU column was recognised in the NetSuite master (expected e.g. 'SKU', "
-                            "'Item Name/Number' or 'Name').")
+        return None
     cols = {
         "sku": sku_c,
         "internal_id": _col(c, "internal id", "internalid", "id", "ns id", "netsuite id"),
@@ -371,14 +372,51 @@ def parse_ns_master(path: Path) -> dict:
     }
     if cols["internal_id"] == sku_c:
         cols["internal_id"] = None
-    records = []
-    for r in t["records"]:
-        v = r["values"]
-        rec = {"row": r["row"]}
-        for k, col in cols.items():
-            rec[k] = as_text(v.get(col)).strip() if col else ""
-        records.append(rec)
-    return {"sheet": t["sheet"], "columns": cols, "all_columns": c, "records": records}
+    return cols
+
+
+def parse_ns_master(path: Path, progress=None) -> dict:
+    """Stream every sheet that has a SKU column, keeping only the columns used for
+    matching.  Records are compact rows ``[sheet index, row, *NS_FIELDS]``."""
+    names, heads = sh.pick_sheets(path, NS_SKU_NAMES)
+    sheets, rows, all_cols = [], [], {}
+    for name in names:
+        head = heads[name]
+        h = sh.header_row_index(head, NS_SKU_NAMES)
+        c = sh.table_from_rows(head[: h + 1], h)["columns"]
+        cols = _ns_columns(c)
+        if not cols:
+            continue
+        idx = [c.index(cols[f]) if cols[f] else None for f in NS_FIELDS]
+        si = len(sheets)
+        sheets.append({"name": name, "columns": cols, "header_row": h + 1})
+        all_cols[name] = c
+        if Path(path).suffix.lower() == ".csv":
+            stream = ((n, dict(enumerate(r))) for n, r in enumerate(sh.iter_rows(path), start=1))
+        else:
+            stream = sh.fast_rows(path, name, {i for i in idx if i is not None})
+        for n, cells in stream:
+            if n <= h + 1:
+                continue
+            vals = [as_text(cells.get(i)).strip() if i is not None else "" for i in idx]
+            if not any(vals):
+                continue
+            rows.append([si, n] + vals)
+            if progress and len(rows) % 5000 == 0:
+                progress(len(rows))
+    if not sheets:
+        raise sh.SheetError("No SKU column was recognised in the NetSuite master (expected e.g. 'SKU', "
+                            "'Item Name/Number' or 'Name').")
+    return {"sheets": sheets, "sheet": ", ".join(x["name"] for x in sheets), "columns": sheets[0]["columns"],
+            "all_columns": all_cols, "fields": NS_FIELDS, "rows": rows}
+
+
+def ns_record(master: dict, row: list) -> dict:
+    """One compact master row as a dict (sheet, row and the NS_FIELDS)."""
+    rec = dict(zip(master["fields"], row[2:]))
+    rec["sheet"] = master["sheets"][row[0]]["name"]
+    rec["row"] = row[1]
+    return rec
 
 
 # -- review sheets --------------------------------------------------------------------
@@ -467,6 +505,7 @@ class Refs:
         self.categories, self.dropdowns, self.mapping = [], {}, None
         self.templates: dict[str, dict] = {}
         self.ns_master = None
+        self.ns_master_pending = None  # progress while a large master is read in the background
         self.reviews: list[dict] = []
         self.sop_text, self.sop_notes = "", []
         self.problems: list[str] = []
@@ -504,43 +543,53 @@ class Refs:
             self.errors[kind] = str(e)
             return None
 
+    def _parsed(self, kind, s, parser, *extra):
+        """Parse ``s`` once per file version (see cache.py)."""
+        tag = kind + ("-" + "-".join(str(x) for x in extra) if extra else "")
+        return self._try(kind, cache.get, tag, s["sha1"], s["path"], lambda p: parser(p, *extra))
+
     def _load(self):
         if (s := self.first("categories")):
-            r = self._try("categories", parse_categories, s["path"])
+            r = self._parsed("categories", s, parse_categories)
             if r:
                 self.categories = r["categories"]
                 self.problems += [f"Categories: {p}" for p in r["problems"]]
                 self.category_columns = r["columns"]
         if (s := self.first("dropdowns")):
-            r = self._try("dropdowns", parse_dropdowns, s["path"])
+            r = self._parsed("dropdowns", s, parse_dropdowns)
             if r:
                 self.dropdowns = r["attributes"]
                 self.problems += [f"Dropdowns: {p}" for p in r["problems"]]
         if (s := self.first("mapping")):
-            self.mapping = self._try("mapping", parse_mapping, s["path"])
+            self.mapping = self._parsed("mapping", s, parse_mapping)
             if self.mapping:
                 self.problems += [f"Mapping workbook: {p}" for p in self.mapping["problems"]]
         settings = (self.mapping or {}).get("settings", {})
         for kind, prefix in (("m2_template", "m2"), ("ns_template", "ns")):
             if (s := self.first(kind)):
                 hr = settings.get(f"{prefix}headerrow")
-                t = self._try(kind, parse_template, s["path"], settings.get(f"{prefix}templatesheet", ""),
-                              int(float(hr)) if hr and _num(hr) else None)
+                t = self._parsed(kind, s, parse_template, settings.get(f"{prefix}templatesheet", ""),
+                                 int(float(hr)) if hr and _num(hr) else None)
                 if t:
-                    t["path"] = str(s["path"])
-                    self.templates[prefix] = t
+                    self.templates[prefix] = dict(t, path=str(s["path"]))
         if (s := self.first("ns_master")):
-            self.ns_master = self._try("ns_master", parse_ns_master, s["path"])
+            big = Path(s["path"]).stat().st_size > cache.BACKGROUND_BYTES if Path(s["path"]).exists() else False
+            if big and not cache.ready("ns_master", s["sha1"]):
+                job = cache.background("ns_master", s["sha1"], s["path"], parse_ns_master)
+                if job["state"] == "error":
+                    self.errors["ns_master"] = job["error"]
+                else:
+                    self.ns_master_pending = dict(job, name=s["name"])
+            else:
+                self.ns_master = self._parsed("ns_master", s, parse_ns_master)
         for s in self.sources.get("review_sheet", []):
-            r = self._try("review_sheet", parse_review_sheet, s["path"])
+            r = self._parsed("review_sheet", s, parse_review_sheet)
             if r:
-                for rec in r["records"]:
-                    rec["file"] = s["name"]
-                self.reviews += r["records"]
+                self.reviews += [dict(rec, file=s["name"]) for rec in r["records"]]
                 self.problems += [f"Review sheet {s['name']}: {p}" for p in r["problems"]]
         texts = []
         for s in self.sources.get("sop", []):
-            text, note = extract_text(s["path"])
+            text, note = self._parsed("sop", s, lambda p: list(extract_text(p))) or ("", "")
             if note:
                 self.sop_notes.append(f"{s['name']}: {note}")
             if text:

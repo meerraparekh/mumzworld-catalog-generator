@@ -37,6 +37,15 @@ blocked; nothing is filled in by guesswork. Upload these on the **Reference libr
 - a template drop-down that disagrees with the approved list
 - a required template column with no mapping
 
+### Large files
+
+A NetSuite master over 20 MB is read once, in the background, as soon as it is uploaded. Only the columns used for
+matching are kept, from every tab that has a SKU column. The ticket page shows how many rows have been read and
+refreshes itself, and processing starts once reading is done. Every parsed reference file is cached by its contents
+under `data/cache/`, so it is never read again, even after a restart. On a test machine a 600,000-row, two-tab
+master (58 MB) took about 70 seconds; a 300 MB master takes a few minutes, once. Exporting the master as CSV is
+also supported, and is read the same way.
+
 ## Ticket workflow
 
 1. **Create ticket.** Enter the number, vendor, region, date and instructions, and upload the vendor file(s),

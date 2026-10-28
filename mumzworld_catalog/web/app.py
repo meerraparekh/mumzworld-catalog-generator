@@ -134,6 +134,8 @@ def create_app(ai_client=None) -> Flask:
                 Library().add(kind, tmp, name, request.form.get("note", ""), who())
             finally:
                 _remove(tmp)
+        if kind == "ns_master":
+            Refs.from_library()  # starts reading a large master in the background
         flash(f"Added {len(files)} file(s) as {REF_KINDS[kind]}.", "ok")
         return redirect(url_for("library") + f"#{kind}")
 
@@ -234,6 +236,8 @@ def create_app(ai_client=None) -> Flask:
                     n += 1
                 finally:
                     _remove(tmp)
+        if t.files("ns_master"):
+            Refs.for_ticket(t)  # starts reading a large master in the background
         return n
 
     @app.get("/t/<tid>")
@@ -611,8 +615,12 @@ def _ref_summary(refs: Refs) -> dict:
             out[f"{k}_template"] = (f"Sheet '{t['sheet']}', header row {t['header_row']}, {len(t['columns'])} columns, "
                                     f"{len(t['required'])} marked required, {len(t['dropdowns'])} with drop-downs")
     if refs.ns_master:
-        out["ns_master"] = (f"{len(refs.ns_master['records'])} items; columns: "
+        out["ns_master"] = (f"{len(refs.ns_master['rows']):,} items from sheet(s) {refs.ns_master['sheet']}; columns: "
                             + ", ".join(f"{k}={v}" for k, v in refs.ns_master["columns"].items() if v))
+    elif refs.ns_master_pending:
+        j = refs.ns_master_pending
+        out["ns_master"] = (f"Still reading {j['name']} ({j.get('size_mb', '?')} MB): {j.get('rows') or 0:,} rows so far. "
+                            "Refresh this page to update.")
     if refs.reviews:
         out["review_sheet"] = f"{len(refs.reviews)} review decisions"
     if refs.sop_text:

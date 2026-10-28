@@ -9,11 +9,12 @@ decisions survive the re-run.
 from __future__ import annotations
 
 import shutil
+import time
 from collections import Counter
 
 from . import ai as ai_mod
 from . import cataloging, exports, images, knowledge, matching, normalize, queries, validation, website
-from . import config
+from . import cache, config
 from .fields import fv, label, propose_column_map, resolve_field_name, set_field, value
 from .reference import Refs, extract_text
 from .sheets import SheetError, inventory
@@ -33,8 +34,9 @@ def vendor_tables(ticket: Ticket) -> list[dict]:
     for f in ticket.files("vendor_input"):
         try:
             sheet = meta.get("vendor_sheets", {}).get(f["id"])
-            t = normalize.sh.read_table(ticket.path(f["stored"]), sheet=sheet) if sheet else \
-                normalize.detect_vendor_sheet(ticket.path(f["stored"]))
+            reader = (lambda p, sh_=sheet: normalize.sh.read_table(p, sheet=sh_)) if sheet else \
+                normalize.detect_vendor_sheet
+            t = dict(cache.get(f"vendor-{sheet or ''}", f["sha1"], ticket.path(f["stored"]), reader))
         except (SheetError, OSError) as e:
             out.append({"file_id": f["id"], "file": f["name"], "error": str(e), "columns": [], "records": [],
                         "sheet": ""})
@@ -64,7 +66,7 @@ def file_inventory(ticket: Ticket) -> dict:
     for f in ticket.meta["files"]:
         info = {"readable": True, "sheets": [], "error": ""}
         if f["kind"] != "images":
-            info = inventory(ticket.path(f["stored"]))
+            info = cache.get("inventory", f["sha1"], ticket.path(f["stored"]), inventory)
         files.append({**f, **info})
     vendor = []
     for t in tables:
@@ -77,6 +79,7 @@ def file_inventory(ticket: Ticket) -> dict:
                        "unmapped": [c for c in t["columns"] if not cmap.get(c)]})
     refs = Refs.for_ticket(ticket)
     return {"files": files, "vendor": vendor, "missing_refs": refs.missing(), "ref_errors": refs.errors,
+            "ns_pending": refs.ns_master_pending,
             "images": len(list(ticket.path("images").glob("*"))),
             "unreadable": [f["name"] for f in files if not f.get("readable", True)]}
 
@@ -124,6 +127,7 @@ def process(ticket: Ticket, by: str = "", ai_client=None) -> dict:
         raise WorkflowError("This ticket is already being processed.")
     if not ticket.files("vendor_input"):
         raise WorkflowError("Upload the vendor product input file first.")
+    ns_master_wait(Refs.for_ticket(ticket))
     ticket.update(lambda m: m.update(processing=True, state="processing"))
     try:
         return _process(ticket, by, ai_client)
@@ -132,9 +136,19 @@ def process(ticket: Ticket, by: str = "", ai_client=None) -> dict:
         ticket.update(lambda m: m.update(state=compute_state(ticket)))
 
 
+def ns_master_wait(refs: Refs) -> None:
+    j = refs.ns_master_pending
+    if j:
+        mins = (time.time() - j["started"]) / 60
+        raise WorkflowError(f"The NetSuite master ({j['name']}, {j.get('size_mb', '?')} MB) is still being read: "
+                            f"{j.get('rows') or 0:,} rows so far, {mins:.0f} min in. This happens once per file; "
+                            "process the ticket when it is done (the ticket page shows progress).")
+
+
 def _process(ticket: Ticket, by: str, ai_client) -> dict:
     at = now()
     refs = Refs.for_ticket(ticket)
+    ns_master_wait(refs)
     used = _snapshot_refs(ticket, refs)
     tables = [t for t in vendor_tables(ticket) if not t.get("error")]
     maps = ensure_column_maps(ticket, tables)
@@ -208,11 +222,12 @@ def revalidate(ticket: Ticket) -> dict:
     catalog = ticket.catalog()
     at = now()
     images_uploaded = any(ticket.path("images").iterdir())
+    doc_text = _doc_text(ticket)
     for k in catalog["order"]:
         p = catalog["products"][k]
         if p.get("eligible"):
             p["targets"] = {s: cataloging.target_values(p, refs, s) for s in ("m2", "ns")}
-            cataloging.check_claims(p, refs, _doc_text(ticket))
+            cataloging.check_claims(p, refs, doc_text)
     qdata = ticket.load("queries", {"queries": [], "next": 1})
     first = validation.validate(catalog, refs, {"queries": []}, ticket.meta, images_uploaded)
     queries.refresh(qdata, catalog["products"], catalog["order"], refs, first["issues"], images_uploaded)

@@ -364,3 +364,53 @@ def test_web_flow(library, files):
     assert c.get("/rules").status_code == 200
     assert c.post("/settings", data={"authorized_reviewers": "Rev"}).status_code == 302
     assert c.get("/settings").status_code == 200
+
+
+def _two_tab_master(path):
+    wb = Workbook()
+    a = wb.active
+    a.title = "Active"
+    a.append(["Exported from NetSuite"])  # header is not on the first row
+    a.append(["Internal ID", "Item Name/Number", "UPC Code", "Display Name"])
+    a.append([1, "TOT-100", "05012345678900", "Old stroller"])
+    a.append([2, "BIG-1", 5.012345678917e12, "Number cell barcode"])
+    b = wb.create_sheet("Inactive")
+    b.append(["Internal ID", "Name", "UPC Code"])
+    b.append([3, "SIP-01", "4006381333931"])
+    wb.save(path)
+    return path
+
+
+def test_ns_master_reads_every_tab_and_keeps_digits(tmp_path):
+    m = reference.parse_ns_master(_two_tab_master(tmp_path / "ns.xlsx"))
+    assert [s["name"] for s in m["sheets"]] == ["Active", "Inactive"]
+    recs = [reference.ns_record(m, r) for r in m["rows"]]
+    assert [(r["sheet"], r["row"], r["sku"]) for r in recs] == [
+        ("Active", 3, "TOT-100"), ("Active", 4, "BIG-1"), ("Inactive", 2, "SIP-01")]
+    assert recs[0]["barcode"] == "05012345678900"  # leading zero of a text cell kept
+    assert recs[1]["barcode"] == "5012345678917"  # number cell, no '.0' or exponent
+
+
+def test_large_ns_master_is_read_in_background(library, files, tmp_path, monkeypatch):
+    import threading
+    import time
+    from mumzworld_catalog import cache
+    monkeypatch.setattr(cache, "BACKGROUND_BYTES", 0)
+    gate, real = threading.Event(), reference.parse_ns_master
+    monkeypatch.setattr(reference, "parse_ns_master", lambda p, progress=None: (gate.wait(5), real(p, progress))[1])
+    t = Ticket.create("MW-3", "Totsy", "UAE", "2026-10-28")
+    t.add_file("vendor_input", files["vendor_input"], "v.xlsx")
+    t.add_file("ns_master", _two_tab_master(tmp_path / "ns.xlsx"), "ns.xlsx")
+    assert reference.Refs.for_ticket(t).ns_master_pending["state"] == "reading"
+    with pytest.raises(pipeline.WorkflowError, match="still being read"):
+        pipeline.process(t, "x")
+    assert t.meta["state"] == "draft"
+    gate.set()
+    for _ in range(100):
+        if cache.ready("ns_master", t.files("ns_master")[0]["sha1"]):
+            break
+        time.sleep(0.05)
+    pipeline.process(t, "x")
+    assert by_sku(t, "TOT-100")["match"]["status"] == "existing"  # 05012345678900 = 5012345678900
+    assert by_sku(t, "SIP-01")["match"]["status"] == "existing"
+    assert "(Inactive)" in by_sku(t, "SIP-01")["match"]["reason"]  # found on the second tab

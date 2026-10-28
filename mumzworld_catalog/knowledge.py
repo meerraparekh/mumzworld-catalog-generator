@@ -7,6 +7,7 @@ saved here.
 """
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 
 from . import config
@@ -32,8 +33,16 @@ def path():
     return d / "rules.json"
 
 
+_cached: dict = {}
+
+
 def load() -> dict:
-    return read_json(path(), {"rules": [], "next": 1})
+    """The rules file, re-read only when it changes (it is consulted for every field)."""
+    p = path()
+    stamp_ = (str(p), p.stat().st_mtime_ns) if p.exists() else (str(p), 0)
+    if _cached.get("stamp") != stamp_:
+        _cached["stamp"], _cached["data"] = stamp_, read_json(p, {"rules": [], "next": 1})
+    return json.loads(json.dumps(_cached["data"]))  # callers may modify their copy
 
 
 def _save(data: dict) -> None:

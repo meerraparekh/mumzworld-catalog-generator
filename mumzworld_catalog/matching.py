@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from .fields import value
+from .reference import ns_record
 from .sheets import norm
 
 EXISTING, NEW, POSSIBLE, CONFLICT = "existing", "new", "possible_match", "conflict"
@@ -18,11 +19,14 @@ LABELS = {EXISTING: "Existing product confirmed", NEW: "New product candidate",
           POSSIBLE: "Possible match - investigate", CONFLICT: "Duplicate or conflicting record"}
 
 
-def _index(records, field):
+def _index(master, field):
+    """{normalized value: [compact master rows]} for one field."""
+    i = master["fields"].index(field) + 2
     idx = defaultdict(list)
-    for r in records:
-        if r.get(field):
-            idx[norm(r[field]) if field != "barcode" else r[field].lstrip("0")].append(r)
+    for r in master["rows"]:
+        v = r[i]
+        if v:
+            idx[norm(v) if field != "barcode" else v.lstrip("0")].append(r)
     return idx
 
 
@@ -39,34 +43,37 @@ def match_all(products: dict, order: list[str], master: dict | None, overrides: 
                           "decision": "Pending", "reason": "Upload the NetSuite master to check existing products."}
             p["eligible"] = True
         return report
-    recs = master["records"]
-    by_sku, by_bc, by_vsku = _index(recs, "sku"), _index(recs, "barcode"), _index(recs, "vendor_sku")
+    indexes = {f: _index(master, f) for f in ("sku", "barcode", "vendor_sku")}
+
+    def hits(field, key):
+        return [ns_record(master, r) for r in indexes[field].get(key, [])]
     for k in order:
         p = products[k]
         sku, bc = value(p, "sku"), value(p, "barcode")
         m = {"status": NEW, "match_type": "", "ns_record": None, "reason": "No master row has this SKU, barcode "
              "or vendor SKU."}
-        sku_hits = by_sku.get(norm(sku), []) if sku else []
-        bc_hits = by_bc.get(bc.lstrip("0"), []) if bc else []
-        vsku_hits = by_vsku.get(norm(sku), []) if sku else []
+        sku_hits = hits("sku", norm(sku)) if sku else []
+        bc_hits = hits("barcode", bc.lstrip("0")) if bc else []
+        vsku_hits = hits("vendor_sku", norm(sku)) if sku else []
         if len(sku_hits) > 1:
             m = {"status": CONFLICT, "match_type": "SKU", "ns_record": sku_hits[0],
                  "reason": f"{len(sku_hits)} master rows have SKU {sku} (rows "
-                           + ", ".join(str(r["row"]) for r in sku_hits) + ")."}
+                           + ", ".join(f"{r['row']} {r['sheet']}" for r in sku_hits) + ")."}
         elif sku_hits:
             r = sku_hits[0]
             if bc and r.get("barcode") and r["barcode"].lstrip("0") != bc.lstrip("0"):
                 m = {"status": CONFLICT, "match_type": "SKU (barcode differs)", "ns_record": r,
-                     "reason": f"SKU matches master row {r['row']} but its barcode is {r['barcode']} and the vendor "
+                     "reason": f"SKU matches master row {r['row']} ({r['sheet']}) but its barcode is {r['barcode']} and the vendor "
                                f"sent {bc}."}
             else:
                 m = {"status": EXISTING, "match_type": "SKU" + (" + barcode" if bc and r.get("barcode") else ""),
-                     "ns_record": r, "reason": f"Exact SKU match with master row {r['row']}."}
+                     "ns_record": r, "reason": f"Exact SKU match with master row {r['row']} ({r['sheet']})."}
         elif bc_hits or vsku_hits:
-            hits = bc_hits or vsku_hits
-            m = {"status": POSSIBLE, "match_type": "barcode" if bc_hits else "vendor SKU", "ns_record": hits[0],
-                 "reason": ("Barcode" if bc_hits else "Vendor SKU") + f" matches master SKU {hits[0]['sku']} (row "
-                           f"{hits[0]['row']}) but the SKU differs. Could be a data error or a legitimate exception."}
+            other = (bc_hits or vsku_hits)[0]
+            m = {"status": POSSIBLE, "match_type": "barcode" if bc_hits else "vendor SKU", "ns_record": other,
+                 "reason": ("Barcode" if bc_hits else "Vendor SKU") + f" matches master SKU {other['sku']} (row "
+                           f"{other['row']}, sheet {other['sheet']}) but the SKU differs. Could be a data error or a "
+                           "legitimate exception."}
         ov = overrides.get(k)
         m["label"] = LABELS[m["status"]]
         if ov:

@@ -1,6 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
+{% if inv.ns_pending %}<meta http-equiv="refresh" content="15">{% endif %}
 {% include "_ticket_head.html" %}
+{% if inv.ns_pending %}<div class="callout info"><b>Reading the NetSuite master</b> {{ inv.ns_pending.name }}
+  ({{ inv.ns_pending.size_mb }} MB): {{ '{:,}'.format(inv.ns_pending.rows or 0) }} rows so far. This happens once per
+  file version and continues in the background; this page refreshes itself. You can upload files and set the column
+  mapping meanwhile; processing starts when it is done.</div>{% endif %}
 {% if meta.instructions %}<div class="callout info"><b>Ticket instructions:</b> {{ meta.instructions }}</div>{% endif %}
 
 <div class="panel">
@@ -21,7 +26,7 @@
       <td>{{ kinds.get(f.kind, f.kind) }}</td>
       <td><a href="{{ url_for('ticket_file', tid=t.id, fid=f.id) }}">{{ f.name }}</a>{% if f.images is defined %} <span class="small muted">({{ f.images|length }} image(s))</span>{% endif %}
         {% if not f.readable %}<span class="badge b-blocker">unreadable</span> {{ f.error }}{% endif %}</td>
-      <td class="small">{% for s in f.sheets %}{{ s.name }} ({{ s.rows }}{% if s.header_row %}, header row {{ s.header_row }}{% endif %}){% if not loop.last %}; {% endif %}{% endfor %}</td>
+      <td class="small">{% for s in f.sheets %}{{ s.name }} ({{ '{:,}'.format(s.rows) if s.rows is not none else '?' }}{% if s.header_row %}, header row {{ s.header_row }}{% endif %}){% if not loop.last %}; {% endif %}{% endfor %}</td>
       <td class="small">{{ f.uploaded_at }} {{ f.by }}</td><td class="small"><code>{{ f.sha1[:10] }}</code></td>
     </tr>{% endfor %}
   </table></div>

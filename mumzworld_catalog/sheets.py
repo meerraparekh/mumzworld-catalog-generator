@@ -54,40 +54,77 @@ def is_blank(value) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
-def _open(path: Path, data_only: bool = True):
+def _open(path: Path, data_only: bool = True, read_only: bool = False):
     try:
-        return load_workbook(path, data_only=data_only, keep_vba=str(path).lower().endswith(".xlsm"))
+        return load_workbook(path, data_only=data_only, read_only=read_only,
+                             keep_vba=not read_only and str(path).lower().endswith(".xlsm"))
     except Exception as exc:  # openpyxl raises many types for bad files
         raise SheetError(f"Could not open workbook: {exc}") from exc
 
 
-def _csv_rows(path: Path) -> list[list]:
-    raw = path.read_bytes()
-    for enc in ("utf-8-sig", "cp1252", "latin-1"):
+def _csv_reader(path: Path):
+    head = path.open("rb").read(65536)
+    enc = "utf-8-sig"
+    for e in ("utf-8-sig", "cp1252"):
         try:
-            text = raw.decode(enc)
+            head.decode(e)
+            enc = e
             break
         except UnicodeDecodeError:
-            continue
+            enc = "latin-1"
+    sample = head.decode(enc, errors="replace")
     try:
-        dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
+        dialect = csv.Sniffer().sniff(sample[:4096], delimiters=",;\t|")
     except csv.Error:
         dialect = csv.excel
-    return [list(r) for r in csv.reader(text.splitlines(), dialect)]
+    fh = path.open("r", encoding=enc, errors="replace", newline="")
+    return fh, csv.reader(fh, dialect)
 
 
-def sheet_rows(path: Path) -> dict[str, list[list]]:
-    """All non-empty sheets as lists of rows (raw values, strings for CSV)."""
+def iter_rows(path: Path, sheet: str | None = None):
+    """Stream the rows of one sheet (the first if not named) as lists, without
+    loading the workbook into memory.  CSV files have one sheet, named after the file."""
     path = Path(path)
     if path.suffix.lower() == ".csv":
-        return {path.stem: _csv_rows(path)}
-    wb = _open(path)
+        fh, reader = _csv_reader(path)
+        with fh:
+            for r in reader:
+                yield list(r)
+        return
+    wb = _open(path, read_only=True)
+    try:
+        ws = wb[sheet] if sheet else wb.worksheets[0]
+        for r in ws.iter_rows(values_only=True):
+            yield list(r)
+    finally:
+        wb.close()  # read-only workbooks keep the file open (and locked on Windows) until closed
+
+
+def sheet_names(path: Path) -> list[str]:
+    path = Path(path)
+    if path.suffix.lower() == ".csv":
+        return [path.stem]
+    wb = _open(path, read_only=True)
+    try:
+        return list(wb.sheetnames)
+    finally:
+        wb.close()
+
+
+def sheet_rows(path: Path, sheets: list[str] | None = None, limit: int | None = None) -> dict[str, list[list]]:
+    """Sheets as lists of rows (raw values, strings for CSV); trailing blank rows dropped.
+    ``limit`` reads only the first rows of each sheet."""
+    path = Path(path)
     out = {}
-    for ws in wb.worksheets:
-        rows = [list(r) for r in ws.iter_rows(values_only=True)]
+    for name in sheets or sheet_names(path):
+        rows = []
+        for r in iter_rows(path, name if path.suffix.lower() != ".csv" else None):
+            rows.append(r)
+            if limit and len(rows) >= limit:
+                break
         while rows and all(is_blank(v) for v in rows[-1]):
             rows.pop()
-        out[ws.title] = rows
+        out[name] = rows
     return out
 
 
@@ -136,49 +173,230 @@ def table_from_rows(rows: list[list], header_idx: int) -> dict:
     return {"header_row": header_idx + 1, "columns": used, "records": records}
 
 
+# -- fast column reader for very large workbooks --------------------------------------
+_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+_RNS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+
+
+def _col_index(ref: str) -> int:
+    n = 0
+    for ch in ref:
+        if ch.isalpha():
+            n = n * 26 + (ord(ch.upper()) - 64)
+        else:
+            break
+    return n - 1
+
+
+class FastBook:
+    """Direct XML access to an .xlsx: sheet list, shared strings (read once) and
+    streaming rows.  Many times faster than openpyxl on huge workbooks.  Values are
+    the cell text as stored (numbers as written, not converted), so identifiers
+    keep every digit; dates stay as Excel serial numbers."""
+
+    def __init__(self, path: Path):
+        import xml.etree.ElementTree as ET
+        import zipfile
+        self.ET = ET
+        try:
+            self.zf = zipfile.ZipFile(path)
+            wb = ET.fromstring(self.zf.read("xl/workbook.xml"))
+            rels = ET.fromstring(self.zf.read("xl/_rels/workbook.xml.rels"))
+        except (zipfile.BadZipFile, KeyError, ET.ParseError) as e:
+            raise SheetError(f"Could not open workbook: {e}") from e
+        targets = {r.get("Id"): r.get("Target") for r in rels}
+        self.sheets = {}
+        for el in wb.iter(f"{_NS}sheet"):
+            t = (targets.get(el.get(f"{_RNS}id")) or "").lstrip("/")
+            self.sheets[el.get("name")] = t if t.startswith("xl/") else f"xl/{t}"
+        self._shared = None
+
+    def close(self):
+        self.zf.close()
+
+    @property
+    def shared(self) -> list[str]:
+        if self._shared is None:
+            self._shared = []
+            if "xl/sharedStrings.xml" in self.zf.namelist():
+                with self.zf.open("xl/sharedStrings.xml") as fh:
+                    for _, el in self.ET.iterparse(fh):
+                        if el.tag == f"{_NS}si":
+                            self._shared.append("".join(t.text or "" for t in el.iter(f"{_NS}t")))
+                            el.clear()
+        return self._shared
+
+    def dimension_rows(self, sheet: str) -> int | None:
+        """Row count from the sheet's <dimension>, read from the start of its XML."""
+        with self.zf.open(self.sheets[sheet]) as fh:
+            head = fh.read(4096).decode("utf-8", errors="ignore")
+        m = re.search(r'<(?:\w+:)?dimension ref="[A-Z]+\d+:[A-Z]+(\d+)"', head)
+        return int(m.group(1)) if m else None
+
+    def rows(self, sheet: str, columns: set[int] | None = None, typed: bool = False):
+        """Stream ``(row number, {column index: text})``; only ``columns`` are kept when given.
+        With ``typed``, number cells come back as int/float."""
+        if sheet not in self.sheets:
+            raise SheetError(f"Sheet '{sheet}' not found.")
+        shared = None
+        with self.zf.open(self.sheets[sheet]) as fh:
+            row_no, cells = 0, {}
+            for _, el in self.ET.iterparse(fh):
+                tag = el.tag
+                if tag == f"{_NS}c":
+                    ref = el.get("r") or ""
+                    ci = _col_index(ref) if ref else len(cells)
+                    if columns is None or ci in columns:
+                        t = el.get("t")
+                        if t == "inlineStr":
+                            val = "".join(x.text or "" for x in el.iter(f"{_NS}t"))
+                        else:
+                            v = el.find(f"{_NS}v")
+                            val = v.text if v is not None else None
+                            if val is not None and t == "s":
+                                shared = shared if shared is not None else self.shared
+                                val = shared[int(val)]
+                            elif val is not None and t == "b":
+                                val = "TRUE" if val == "1" else "FALSE"
+                            elif val is not None and typed and t in (None, "n"):
+                                try:
+                                    f = float(val)
+                                    val = int(f) if f.is_integer() else f
+                                except ValueError:
+                                    pass
+                            elif val is not None and t in (None, "n") and ("E" in val or "e" in val):
+                                try:
+                                    f = float(val)
+                                    val = str(int(f)) if f.is_integer() else val
+                                except ValueError:
+                                    pass
+                        if val not in (None, ""):
+                            cells[ci] = val
+                    el.clear()
+                elif tag == f"{_NS}row":
+                    r = el.get("r")
+                    row_no = int(r) if r else row_no + 1
+                    yield row_no, cells
+                    cells = {}
+                    el.clear()
+
+
+def fast_rows(path: Path, sheet: str, columns: set[int] | None = None):
+    book = FastBook(path)
+    try:
+        yield from book.rows(sheet, columns)
+    finally:
+        book.close()
+
+
+def _fast_heads(path: Path):
+    book = FastBook(path)
+    heads, sizes = {}, {}
+    try:
+        for name in book.sheets:
+            rows, last = [], 0
+            for n, cells in book.rows(name, typed=True):
+                while last + 1 < n and len(rows) < HEADER_SCAN_ROWS:  # rows the file leaves out are blank
+                    rows.append([])
+                    last += 1
+                if len(rows) >= HEADER_SCAN_ROWS:
+                    break
+                rows.append([cells.get(i) for i in range(max(cells) + 1)] if cells else [])
+                last = n
+            while rows and all(is_blank(v) for v in rows[-1]):
+                rows.pop()
+            heads[name] = rows
+            sizes[name] = book.dimension_rows(name)
+    finally:
+        book.close()
+    return heads, sizes
+
+
+def heads_and_sizes(path: Path) -> tuple[dict[str, list[list]], dict[str, int | None]]:
+    """First rows and stored row count of every sheet, opening the workbook once."""
+    path = Path(path)
+    if path.suffix.lower() == ".csv":
+        return sheet_rows(path, limit=HEADER_SCAN_ROWS), {path.stem: None}
+    try:
+        return _fast_heads(path)
+    except (SheetError, KeyError, ValueError, OSError):
+        pass  # unusual file layout: let openpyxl read it
+    wb = _open(path, read_only=True)
+    heads, sizes = {}, {}
+    try:
+        for ws in wb.worksheets:
+            rows = []
+            for r in ws.iter_rows(values_only=True):
+                rows.append(list(r))
+                if len(rows) >= HEADER_SCAN_ROWS:
+                    break
+            while rows and all(is_blank(v) for v in rows[-1]):
+                rows.pop()
+            heads[ws.title] = rows
+            # Only the stored dimension: asking openpyxl for max_row without one scans the sheet.
+            sizes[ws.title] = getattr(ws, "_max_row", None) or None
+    finally:
+        wb.close()
+    return heads, sizes
+
+
+def pick_sheets(path: Path, must_have: list[str] | None = None) -> tuple[list[str], dict]:
+    """Sheets ordered by likelihood of holding the table: those whose first rows contain
+    a ``must_have`` header first, then by size.  Reads only the first rows of each."""
+    heads, sizes = heads_and_sizes(path)
+    names = list(heads)
+    if must_have:
+        wanted = {norm(n) for n in must_have}
+        hits = [s for s in names if any(norm(v) in wanted for r in heads[s] for v in r if not is_blank(v))]
+        names = hits or names
+    names = [n for n in names if heads[n]] or names
+    names.sort(key=lambda n: -(sizes.get(n) or 0))
+    return names, heads
+
+
 def read_table(path: Path, sheet: str | None = None, must_have: list[str] | None = None) -> dict:
-    """Read one table.  Without ``sheet`` the sheet with the most data rows (or the
-    first containing a ``must_have`` header) is used."""
-    sheets = sheet_rows(path)
-    if not sheets:
-        raise SheetError("The workbook has no sheets.")
+    """Read one table.  Without ``sheet`` the largest sheet (among those containing a
+    ``must_have`` header, if any) is used."""
+    path = Path(path)
     if sheet:
-        if sheet not in sheets:
-            raise SheetError(f"Sheet '{sheet}' not found. Sheets: {', '.join(sheets)}")
-        chosen = [sheet]
+        if path.suffix.lower() != ".csv" and sheet not in sheet_names(path):
+            raise SheetError(f"Sheet '{sheet}' not found. Sheets: {', '.join(sheet_names(path))}")
+        name = sheet
     else:
-        chosen = list(sheets)
-        if must_have:
-            wanted = {norm(n) for n in must_have}
-            hits = [s for s in chosen if any(norm(v) in wanted for r in sheets[s][:HEADER_SCAN_ROWS] for v in r
-                                             if not is_blank(v))]
-            chosen = hits or chosen
-        chosen.sort(key=lambda s: -len(sheets[s]))
-    name = chosen[0]
-    rows = sheets[name]
+        names, _ = pick_sheets(path, must_have)
+        if not names:
+            raise SheetError("The workbook has no sheets.")
+        name = names[0]
+    rows = sheet_rows(path, [name])[name]
     t = table_from_rows(rows, header_row_index(rows, must_have))
     t["sheet"] = name
     return t
 
 
 def inventory(path: Path) -> dict:
-    """Describe a file for the pre-processing check: sheets, header row, data rows."""
+    """Describe a file for the pre-processing check: sheets, header row, data rows.
+    Only the first rows are read; the row count comes from the stored dimensions
+    (counted for small files that do not record it)."""
     path = Path(path)
     info = {"readable": True, "sheets": [], "error": ""}
     if path.suffix.lower() not in SPREADSHEET_EXT:
         return info
     try:
-        sheets = sheet_rows(path)
+        heads, sizes = heads_and_sizes(path)
     except (SheetError, OSError, UnicodeError) as e:
         return {"readable": False, "sheets": [], "error": str(e)}
-    for name, rows in sheets.items():
+    small = path.stat().st_size < 20 * 1024 * 1024
+    for name, rows in heads.items():
         if not rows:
             info["sheets"].append({"name": name, "rows": 0, "columns": [], "header_row": None})
             continue
         h = header_row_index(rows)
-        t = table_from_rows(rows, h)
-        info["sheets"].append({"name": name, "rows": len(t["records"]), "columns": t["columns"][:60],
-                               "header_row": h + 1})
+        cols = table_from_rows(rows, h)["columns"]
+        size = sizes.get(name)
+        if size is None and small:
+            size = sum(1 for _ in iter_rows(path, name if path.suffix.lower() != ".csv" else None))
+        info["sheets"].append({"name": name, "rows": max(0, size - h - 1) if size else None,
+                               "columns": cols[:60], "header_row": h + 1})
     return info
 
 
