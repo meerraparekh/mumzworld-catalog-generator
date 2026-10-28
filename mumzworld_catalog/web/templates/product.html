@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_ticket_head.html" %}
+<div class="row" style="justify-content:space-between">
+  <h2>{{ value(p, 'sku') or '(no SKU)' }} — {{ value(p, 'title') or value(p, 'product_name') }}</h2>
+  <div class="row">
+    {% if prev_key %}<a class="btn secondary" href="{{ url_for('product', tid=t.id, key=prev_key) }}">← Previous</a>{% endif %}
+    {% if next_key %}<a class="btn secondary" href="{{ url_for('product', tid=t.id, key=next_key) }}">Next →</a>{% endif %}
+  </div>
+</div>
+<p class="muted">From {{ p.source.file }}, sheet {{ p.source.sheet }}, row {{ p.source.row }} · review status
+  <span class="badge b-{{ p.review.status }}">{{ p.review.status }}</span>{% if p.review.by %} by {{ p.review.by }} {{ p.review.at }}{% endif %}</p>
+
+{% if issues %}
+<div class="panel"><h3>Findings</h3><table>
+  {% for i in issues %}<tr><td><span class="badge b-{{ i.severity }}">{{ i.severity }}</span>{% if i.waived %} <span class="badge b-ok">waived by {{ i.waived.by }}</span>{% endif %}</td>
+    <td class="small"><code>{{ i.code }}</code></td><td>{{ label(i.field) if i.field else '' }} {{ i.system|upper }}</td><td>{{ i.reason }}</td><td class="small">{{ i.action }}</td>
+    <td>{% if i.severity == 'blocker' and not i.waived %}<form class="row" method="post" action="{{ url_for('waive', tid=t.id) }}">
+      <input type="hidden" name="issue" value="{{ i.id }}"><input type="text" name="reason" placeholder="Waiver reason" required style="width:150px">
+      {% include "_who.html" %}<button class="danger small">Waive</button></form>{% endif %}</td></tr>{% endfor %}
+</table></div>{% endif %}
+
+<div class="panel">
+  <h3>Existing-product check</h3>
+  <p>{{ p.match.label }} — {{ p.match.reason }}{% if p.match.ns_record %} <span class="small muted">(NetSuite row {{ p.match.ns_record.row }}: {{ p.match.ns_record.internal_id }} {{ p.match.ns_record.sku }} {{ p.match.ns_record.name }}, barcode {{ p.match.ns_record.barcode }})</span>{% endif %}</p>
+  {% if p.match_override %}<p><b>Decision:</b> {{ p.match.decision }} by {{ p.match_override.by }} ({{ p.match_override.reason }})</p>{% endif %}
+  {% if p.match.status in ('possible_match', 'conflict', 'existing') %}
+  <form class="row" method="post" action="{{ url_for('product_action', tid=t.id, key=key, action='match') }}">
+    <select name="decision"><option value="new">Create as new item</option><option value="existing">Exclude (existing product)</option>{% if p.match_override %}<option value="clear">Clear decision</option>{% endif %}</select>
+    <input type="text" name="reason" placeholder="Reason (required)" style="width:300px">
+    {% include "_who.html" %}<button class="secondary">Record decision</button></form>{% endif %}
+</div>
+
+{% if p.eligible %}
+<div class="panel">
+  <h3>Catalog decisions</h3>
+  <p class="small muted">Original vendor value on the left, working value on the right. Editing sets the value as
+    “Reviewer set” and locks it; Accept locks a proposal as it stands. Locked values are never changed by re-processing or responses.</p>
+  <div class="tablewrap" style="max-height:none"><table>
+    <tr><th>Field</th><th>Original</th><th>Working value</th><th>Decision</th><th>Source / reason</th><th>Actions</th></tr>
+    {% for f in field_order %}{% set d = p.fields[f] %}
+      <tr id="{{ f }}">
+        <td><b>{{ label(f) }}</b>{% if f.startswith('attr:') %} <span class="small muted">(attribute)</span>{% endif %}{% if d.locked %}<div class="locked">locked{% if d.approved_by %} · accepted by {{ d.approved_by }}{% endif %}</div>{% endif %}</td>
+        <td class="small" style="max-width:220px;white-space:pre-wrap">{{ d.original if d.original is not none and (d.source or '').startswith(('vendor:', 'field:', 'response:')) else '' }}</td>
+        <td style="max-width:360px;white-space:pre-wrap">{{ d.value if d.value is not none else '—' }}
+          {% if d.candidates %}<details class="small"><summary>Candidates</summary>{% for c in d.candidates %}{{ c.category }} ({{ c.score }}; {{ c.why }})<br>{% endfor %}</details>{% endif %}
+          {% if d.claims %}<div class="small" style="color:var(--warn)">Unsupported claim words: {{ d.claims|join(', ') }}</div>{% endif %}
+          {% if d.special %}<div class="small" style="color:var(--warn)">{{ d.special }}</div>{% endif %}
+          {% if d.conflicts %}<div class="small" style="color:var(--err)">Conflicting answers: {% for c in d.conflicts %}{{ c.value }} ({{ c.file }}){% if not loop.last %}; {% endif %}{% endfor %}</div>{% endif %}</td>
+        <td><span class="badge c-{{ d.class }}">{{ CLASSES.get(d.class, d.class) }}</span> <span class="badge b-{{ d.status }}">{{ d.status }}</span></td>
+        <td class="small">{{ d.source }}{% if d.transform %}<br>{{ d.transform }}{% endif %}<br>{{ d.reason }}
+          {% if d.history %}<details><summary>{{ d.history|length }} earlier value(s)</summary>{% for h in d.history|reverse %}{{ h.at }}: {{ h.value }} ({{ h.source }}){% if h.reason %} — {{ h.reason }}{% endif %}<br>{% endfor %}</details>{% endif %}</td>
+        <td>
+          <div class="row">
+          {% if not d.locked and d.value %}<form method="post" action="{{ url_for('product_action', tid=t.id, key=key, action='accept') }}"><input type="hidden" name="field" value="{{ f }}"><input type="hidden" name="by" value="{{ who }}"><button>Accept</button></form>{% endif %}
+          {% if d.locked %}<form method="post" action="{{ url_for('product_action', tid=t.id, key=key, action='unlock') }}"><input type="hidden" name="field" value="{{ f }}"><input type="hidden" name="by" value="{{ who }}"><button class="secondary">Unlock</button></form>{% endif %}
+          </div>
+          <details {% if d.status == 'blocker' %}open{% endif %}><summary class="small">Edit</summary>
+          <form method="post" action="{{ url_for('product_action', tid=t.id, key=key, action='edit') }}">
+            <input type="hidden" name="field" value="{{ f }}">
+            {% if options.get(f) %}<select name="value"><option value="">(empty)</option>{% for o in options[f] %}<option {% if o == d.value %}selected{% endif %}>{{ o }}</option>{% endfor %}</select>
+            {% elif f in ('long_description','bullet_points','short_description') %}<textarea name="value" style="font-family:inherit;font-size:13px;min-height:70px">{{ d.value or '' }}</textarea>
+            {% else %}<input type="text" name="value" value="{{ d.value or '' }}">{% endif %}
+            <input type="text" name="reason" placeholder="Reason">
+            <div class="row" style="margin-top:4px">{% include "_who.html" %}<button class="secondary">Save</button></div>
+          </form></details>
+        </td>
+      </tr>
+    {% endfor %}
+  </table></div>
+  <details style="margin-top:10px"><summary>Add a field value (e.g. a value the vendor gave by email)</summary>
+    <form class="row" method="post" action="{{ url_for('product_action', tid=t.id, key=key, action='edit') }}">
+      <select name="field">{% for f in source_fields + ['category','title','short_description','long_description','bullet_points','search_terms'] %}{% if f not in p.fields %}<option value="{{ f }}">{{ label(f) }}</option>{% endif %}{% endfor %}
+        {% for f in options.keys() if f.startswith('attr:') and f not in p.fields %}<option value="{{ f }}">{{ label(f) }}</option>{% endfor %}</select>
+      <input type="text" name="value" placeholder="Value" style="width:260px"><input type="text" name="reason" placeholder="Source / reason" style="width:220px">
+      {% include "_who.html" %}<button class="secondary">Add</button></form></details>
+</div>
+
+<div class="side">
+  <div class="panel">
+    <h3>Magento 2 values</h3>
+    <table>{% for col, c in (p.targets or {}).get('m2', {}).items() %}<tr><td>{{ col }}</td><td style="white-space:pre-wrap">{{ c.value }}</td><td class="small muted">{{ c.rule }} {{ c.source }}{% if c.issue %}<br><span style="color:var(--err)">{{ c.issue }}</span>{% endif %}</td></tr>{% endfor %}</table>
+  </div>
+  <div class="panel">
+    <h3>NetSuite values</h3>
+    <table>{% for col, c in (p.targets or {}).get('ns', {}).items() %}<tr><td>{{ col }}</td><td style="white-space:pre-wrap">{{ c.value }}</td><td class="small muted">{{ c.rule }} {{ c.source }}{% if c.issue %}<br><span style="color:var(--err)">{{ c.issue }}</span>{% endif %}</td></tr>{% endfor %}</table>
+  </div>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h3>Images</h3>
+  <div class="thumbs">{% for i in p.images %}<figure><img src="{{ url_for('ticket_image', tid=t.id, name=i.file) }}" alt="">
+    <figcaption>{{ i.file }}<br><span class="badge b-{{ 'ok' if i.confidence == 'confirmed' else 'warning' }}">{{ i.confidence }}</span> {{ i.how }}
+      <form method="post" action="{{ url_for('product_action', tid=t.id, key=key, action='image') }}">
+        <input type="hidden" name="file" value="{{ i.file }}"><input type="hidden" name="by" value="{{ who }}">
+        {% if i.confidence != 'confirmed' %}<button name="remove" value="0">Confirm</button>{% endif %}
+        <button class="secondary" name="remove" value="1">Remove</button></form></figcaption></figure>{% endfor %}
+    {% if not p.images %}<p class="muted">No images associated.</p>{% endif %}</div>
+  {% for r in p.image_refs or [] %}<div class="small">{{ r.ref }} — {{ r.status }}</div>{% endfor %}
+  {% if all_images %}<form class="row" method="post" action="{{ url_for('product_action', tid=t.id, key=key, action='image') }}" style="margin-top:8px">
+    <select name="file">{% for n in all_images %}<option>{{ n }}</option>{% endfor %}</select>
+    {% include "_who.html" %}<button class="secondary">Link image</button></form>{% endif %}
+  {% if cfg.ai_enabled and p.images %}<form method="post" action="{{ url_for('product_action', tid=t.id, key=key, action='inspect') }}" style="margin-top:8px">
+    <input type="hidden" name="by" value="{{ who }}"><button class="secondary">Inspect first image with the assistant</button></form>{% endif %}
+</div>
+
+<div class="panel">
+  <h3>Evidence and references</h3>
+  {% for e in p.evidence %}
+    <div class="small" style="margin-bottom:6px">
+    {% if e.type == 'website_search' %}<b>Mumzworld.com search</b> “{{ e.query }}” ({{ e.at }}): <span class="badge b-{{ 'ok' if e.status == 'listed' else 'warning' }}">{{ e.status }}</span> {{ e.detail }}
+      {% for r in e.results %}<br>→ <a href="{{ r.url }}" target="_blank" rel="noopener">{{ r.title }}</a>{% endfor %}
+    {% elif e.type == 'image_inspection' %}<b>Image inspection</b> of {{ e.file }} ({{ e.by }}): {{ e.observed.product_type }}; colours {{ e.observed.colours|join(', ') }};
+      features {{ e.observed.visible_features|join(', ') }}{% if e.observed.mismatches %}; <span style="color:var(--warn)">mismatches: {{ e.observed.mismatches|join('; ') }}</span>{% endif %}. <i>{{ e.note }}</i>
+    {% else %}<b>Reference</b> <a href="{{ e.url }}" target="_blank" rel="noopener">{{ e.url }}</a> — {{ e.exact }} match; supports: {{ e.supports }}; fields: {{ e.fields }} ({{ e.by }} {{ e.at }}){% endif %}
+    </div>
+  {% endfor %}
+  {% if not p.evidence %}<p class="muted small">No external references recorded.</p>{% endif %}
+  <div class="row">
+  {% if cfg.website_lookup %}<form method="post" action="{{ url_for('product_action', tid=t.id, key=key, action='lookup') }}"><input type="hidden" name="by" value="{{ who }}"><button class="secondary">Look up on Mumzworld.com</button></form>{% endif %}
+  </div>
+  <details><summary>Record a reference you checked</summary>
+    <form method="post" action="{{ url_for('product_action', tid=t.id, key=key, action='evidence') }}">
+      <label>Page URL</label><input type="text" name="url" required>
+      <label>Match</label><select name="exact"><option value="exact">Exact product</option><option value="comparable">Comparable listing</option></select>
+      <label>What it supports</label><input type="text" name="supports" placeholder="e.g. title convention, category placement">
+      <label>Fields it informs</label><input type="text" name="fields" placeholder="e.g. title, category">
+      <div class="row" style="margin-top:6px">{% include "_who.html" %}<button class="secondary">Save reference</button></div></form></details>
+</div>
+
+{% if qs %}<div class="panel"><h3>Vendor queries</h3><table>{% for q in qs %}<tr><td>{{ q.id }}</td><td>{{ q.field_label }}</td><td>{{ q.question }}</td><td><span class="badge b-{{ q.status }}">{{ q.status }}</span></td><td class="small">{% for a in q.answers %}{{ a.value }} ({{ a.file }})<br>{% endfor %}</td></tr>{% endfor %}</table></div>{% endif %}
+
+{% if p.eligible %}
+<form class="panel row" method="post" action="{{ url_for('product_action', tid=t.id, key=key, action='review') }}">
+  <h3 style="margin:0">Product review</h3>
+  <input type="text" name="note" placeholder="Note" style="width:260px">{% include "_who.html" %}
+  <button name="status" value="approved">Approve product</button>
+  <button class="secondary" name="status" value="rejected">Reject</button>
+  <button class="secondary" name="status" value="pending">Reset</button>
+</form>{% endif %}
+
+<div class="panel"><h3>Original vendor row</h3><table class="kv">{% for c, v in p.original.items() %}<tr><td>{{ c }}</td><td style="white-space:pre-wrap">{{ v }}</td></tr>{% endfor %}</table>
+  {% if p.review_log %}<h3>Review log</h3>{% for h in p.review_log|reverse %}<div class="small">{{ h.at }} {{ h.by }}: {{ h.event }}</div>{% endfor %}{% endif %}</div>
+{% endblock %}

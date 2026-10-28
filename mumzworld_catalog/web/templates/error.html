@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="panel"><h1>Something went wrong</h1>
+<p class="muted">Nothing was lost: uploads and saved work stay in the ticket. The details below are also written to <code>error.log</code> in the data folder.</p>
+<pre style="white-space:pre-wrap;font-size:12px">{{ details }}</pre></div>
+{% endblock %}

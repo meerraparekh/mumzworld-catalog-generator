@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_ticket_head.html" %}
+<form class="panel" method="post" enctype="multipart/form-data">
+  <h2>Import vendor responses</h2>
+  <p class="muted">Each file is kept with the ticket. Answers are merged by SKU and field only: other fields stay as they are,
+    the original vendor input is preserved, reviewer-locked values are never overwritten, and a different answer to a
+    field an earlier response already answered is flagged as a conflict. Unknown or ambiguous SKUs are not merged.</p>
+  <input type="file" name="file" multiple required accept=".xlsx,.xlsm,.csv">
+  <div class="row" style="margin-top:8px">{% include "_who.html" %}<button>Import and merge</button></div>
+</form>
+{% for r in results or [] %}
+<div class="panel">
+  <h2>Imported {{ r.file }}</h2>
+  <div class="stats">
+    <div class="stat"><div class="v">{{ r.skus_matched }}</div><div class="k">SKUs matched</div></div>
+    <div class="stat"><div class="v">{{ r.fields_updated }}</div><div class="k">fields updated</div></div>
+    <div class="stat"><div class="v">{{ r.queries_resolved }}</div><div class="k">queries resolved</div></div>
+    <div class="stat"><div class="v">{{ r.queries_partial }}</div><div class="k">partially resolved</div></div>
+    <div class="stat"><div class="v">{{ r.queries_outstanding }}</div><div class="k">still outstanding</div></div>
+    <div class="stat"><div class="v">{{ r.conflicts|length }}</div><div class="k">conflicting responses</div></div>
+    <div class="stat"><div class="v">{{ r.unmatched_skus }}</div><div class="k">unmatched SKUs</div></div>
+    <div class="stat"><div class="v">{{ r.new_issues|length }}</div><div class="k">new validation issues</div></div>
+  </div>
+  {% if r.conflicts %}<h3>Conflicts</h3><table>{% for c in r.conflicts %}<tr><td><a href="{{ url_for('product', tid=t.id, key=c.key) }}">{{ c.sku }}</a></td><td>{{ c.field }}</td><td>kept: {{ c.current }}</td><td>response: {{ c.response }}</td><td class="small">{{ c.detail }}</td></tr>{% endfor %}</table>{% endif %}
+  {% if r.exceptions %}<h3>Exceptions (not merged)</h3><table>{% for x in r.exceptions %}<tr><td>{{ x.type }}</td><td>{{ x.sheet }} row {{ x.row }}</td><td>{{ x.sku }}</td><td>{{ x.field }}</td><td>{{ x.value }}</td><td class="small">{{ x.detail }}</td></tr>{% endfor %}</table>{% endif %}
+  {% if r.new_issues %}<h3>New validation issues</h3><table>{% for i in r.new_issues %}<tr><td><span class="badge b-{{ i.severity }}">{{ i.severity }}</span></td><td>{{ i.sku }}</td><td>{{ label(i.field) if i.field else '' }}</td><td>{{ i.reason }}</td></tr>{% endfor %}</table>{% endif %}
+</div>
+{% endfor %}
+<div class="panel">
+  <h2>Response history</h2>
+  {% if not meta.responses %}<p class="muted">No responses imported yet.</p>{% else %}
+  <table><tr><th>File</th><th>Imported</th><th>By</th><th>Answers</th><th>SKUs</th><th>Fields updated</th><th>Same value</th><th>Conflicts</th><th>Unmatched</th><th>New issues</th></tr>
+  {% for r in meta.responses|reverse %}<tr><td><a href="{{ url_for('ticket_file', tid=t.id, fid=r.file_id) }}">{{ r.file }}</a></td><td>{{ r.at }}</td><td>{{ r.by }}</td><td>{{ r.answers_read }}</td>
+    <td>{{ r.skus_matched }}</td><td>{{ r.fields_updated }}</td><td>{{ r.confirmed_same }}</td><td>{{ r.conflicts|length }}</td><td>{{ r.unmatched_skus }}</td><td>{{ r.new_issue_count }}</td></tr>{% endfor %}</table>{% endif %}
+  {% if exceptions %}<details><summary>All response exceptions ({{ exceptions|length }})</summary><table>{% for x in exceptions %}<tr><td>{{ x.file }}</td><td>{{ x.type }}</td><td>{{ x.sheet }} row {{ x.row }}</td><td>{{ x.sku }}</td><td>{{ x.field }}</td><td>{{ x.value }}</td><td class="small">{{ x.detail }}</td></tr>{% endfor %}</table></details>{% endif %}
+</div>
+{% endblock %}

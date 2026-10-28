@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Review decisions: lessons</h1>
+<p class="muted">{{ records }} review decisions read; {{ result.skipped }} had no correction. Lessons are grouped by field and original
+  value and classified. Storing them creates <b>suggestions</b> only — rule candidates are applied after approval;
+  one-off corrections and conflicting examples are listed for information.</p>
+{% include "_lessons_table.html" %}
+<form method="post" class="panel"><button>Store rule candidates as suggestions</button></form>
+{% endblock %}

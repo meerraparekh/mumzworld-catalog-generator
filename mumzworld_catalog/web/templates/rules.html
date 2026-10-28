@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Approved rules and suggestions</h1>
+<p class="muted">Suggestions come from review sheets and from reviewer corrections in tickets. Only <b>approved</b> rules
+  are applied, and each value they set names the rule (e.g. <code>rule:R0003</code>). One-off corrections and
+  conflicting examples are never stored as rules.</p>
+<div class="row">
+  {% for s, n in [('', 'All'), ('suggested', 'Suggested'), ('approved', 'Approved'), ('rejected', 'Rejected')] %}
+  <a class="btn {% if status != s %}secondary{% endif %}" href="{{ url_for('rules', status=s) }}">{{ n }}</a>{% endfor %}
+</div>
+<div class="panel" style="margin-top:12px">
+{% if not rules %}<p class="muted">No rules here yet. Analyse review sheets from the reference library, or store a ticket's
+  lessons from its History page.</p>{% else %}
+<div class="tablewrap"><table>
+  <tr><th>ID</th><th>Rule</th><th>Type</th><th>Examples</th><th>Source</th><th>Status</th><th>Decide</th></tr>
+  {% for r in rules %}
+  <tr>
+    <td>{{ r.id }}</td>
+    <td><b>{{ label(r.field) }}</b>: “{{ r.from }}” → “{{ r.to }}”<div class="small muted">{{ r.description }}</div>
+      {% if r.notes %}<div class="small">Notes: {{ r.notes }}</div>{% endif %}</td>
+    <td>{{ classes.get(r.classification, r.classification) }}</td>
+    <td class="small">{% for e in r.examples[:5] %}{{ e.file }} {{ e.sheet }} row {{ e.row }}{% if e.sku %} ({{ e.sku }}){% endif %}{% if e.comment %}: {{ e.comment }}{% endif %}<br>{% endfor %}
+      {% if r.examples|length > 5 %}+{{ r.examples|length - 5 }} more{% endif %}</td>
+    <td class="small">{{ r.source }}<br>{{ r.added_at }}</td>
+    <td><span class="badge b-{{ 'ok' if r.status == 'approved' else ('rejected' if r.status == 'rejected' else 'review') }}">{{ r.status }}</span>
+      {% if r.approved_by %}<div class="small">{{ r.approved_by }} {{ r.approved_at }}</div>{% endif %}</td>
+    <td><form method="post" action="{{ url_for('rule_decide', rid=r.id, status=status) }}">
+      <input type="text" name="to" value="{{ r.to }}" title="Value the rule sets">
+      <input type="text" name="notes" placeholder="Notes / exceptions">
+      {% include "_who.html" %}
+      <div class="row" style="margin-top:4px">
+        <button name="status" value="approved">Approve</button>
+        <button class="secondary" name="status" value="rejected">Reject</button>
+        <button class="secondary" name="status" value="suggested">Back to suggested</button>
+      </div></form></td>
+  </tr>{% endfor %}
+</table></div>{% endif %}
+</div>
+{% endblock %}

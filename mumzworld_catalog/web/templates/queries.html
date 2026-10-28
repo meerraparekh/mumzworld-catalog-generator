@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_ticket_head.html" %}
+<div class="panel">
+  <div class="row" style="justify-content:space-between">
+    <div class="row">{% for s, n in [('outstanding','Outstanding'),('answered','Answered'),('resolved','Resolved'),('closed','Closed (no longer needed)'),('conflict','Conflicts'),('all','All')] %}
+      <a class="btn {% if status != s %}secondary{% endif %}" href="{{ url_for('queries_page', tid=t.id, status=s) }}">{{ n }}</a>{% endfor %}</div>
+    <a class="btn" href="{{ url_for('download', tid=t.id, what='queries') }}">Download query sheet for the vendor</a>
+  </div>
+  <p class="small muted">Generated with the working catalog on every run, only for required information that is missing,
+    unsupported or contradictory. One row per SKU and field (for field-level merging); the download also has a
+    consolidated “By SKU” sheet. Send it back with the Vendor Answer column filled in, or any sheet with a SKU column
+    and field columns.</p>
+  {% if not qs %}<p class="muted">No queries in this view.</p>{% else %}
+  <div class="tablewrap"><table>
+    <tr><th>ID</th><th>SKU</th><th>Product</th><th>Field</th><th>Current</th><th>Question</th><th>Reason</th><th>Expected</th><th>Priority</th><th>Status</th><th>Answers</th></tr>
+    {% for q in qs %}<tr>
+      <td>{{ q.id }}</td><td><a href="{{ url_for('product', tid=t.id, key=q.key) }}">{{ q.sku }}</a></td><td class="small">{{ q.product }}</td>
+      <td>{{ q.field_label }}</td><td class="small">{{ q.current }}</td><td>{{ q.question }}</td><td class="small">{{ q.reason }}</td>
+      <td class="small"><div class="clip">{{ q.expected }}</div></td><td>{{ q.priority }}</td><td><span class="badge b-{{ q.status }}">{{ q.status }}</span></td>
+      <td class="small">{% for a in q.answers %}{{ a.value }} ({{ a.file }}){% if not loop.last %}<br>{% endif %}{% endfor %}</td>
+    </tr>{% endfor %}
+  </table></div>{% endif %}
+</div>
+{% endblock %}

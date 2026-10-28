@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_ticket_head.html" %}
+<div class="panel">
+  <div class="row" style="justify-content:space-between">
+    <div class="stats" style="flex:1">
+      <div class="stat"><div class="v">{{ val.counts.blocker or 0 }}</div><div class="k">blockers</div></div>
+      <div class="stat"><div class="v">{{ val.counts.warning or 0 }}</div><div class="k">warnings</div></div>
+      <div class="stat"><div class="v">{{ val.counts.info or 0 }}</div><div class="k">informational</div></div>
+      <div class="stat"><div class="v">{{ val.counts.waived or 0 }}</div><div class="k">waived</div></div>
+      <div class="stat"><div class="v">{{ val.ticket_blockers or 0 }}</div><div class="k">ticket-level blockers</div></div>
+    </div>
+    <form method="post" action="{{ url_for('revalidate', tid=t.id) }}"><button class="secondary">Re-run validation</button></form>
+  </div>
+  <form class="row" method="get">
+    <select name="severity"><option value="">All severities</option>{% for s in ['blocker','warning','info'] %}<option {% if sev == s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+    <select name="code"><option value="">All checks</option>{% for c in codes %}<option {% if code == c %}selected{% endif %}>{{ c }}</option>{% endfor %}</select>
+    <button class="secondary">Filter</button> <span class="muted small">{{ total }} finding(s){% if total > issues|length %}, first {{ issues|length }} shown{% endif %}</span>
+  </form>
+</div>
+<div class="panel"><div class="tablewrap"><table>
+  <tr><th>Severity</th><th>Check</th><th>SKU</th><th>Field</th><th>System</th><th>Current value</th><th>Expected</th><th>Reason</th><th>Suggested action</th><th>Waiver</th></tr>
+  {% for i in issues %}<tr>
+    <td><span class="badge b-{{ i.severity }}">{{ i.severity }}</span></td><td class="small"><code>{{ i.code }}</code></td>
+    <td>{% if i.key %}<a href="{{ url_for('product', tid=t.id, key=i.key) }}">{{ i.sku or i.key }}</a>{% else %}<i>ticket</i>{% endif %}</td>
+    <td>{{ label(i.field) if i.field else '' }}</td><td>{{ i.system|upper }}</td><td class="small"><div class="clip">{{ i.current }}</div></td>
+    <td class="small">{{ i.expected }}</td><td class="small">{{ i.reason }}</td><td class="small">{{ i.action }}</td>
+    <td>{% if i.waived %}<span class="badge b-ok">waived</span><div class="small">{{ i.waived.by }}, {{ i.waived.at }}: {{ i.waived.reason }}</div>
+      {% elif i.severity == 'blocker' %}<form method="post" action="{{ url_for('waive', tid=t.id) }}"><input type="hidden" name="issue" value="{{ i.id }}">
+        <input type="text" name="reason" placeholder="Reason" required>{% include "_who.html" %}<button class="danger">Waive</button></form>{% endif %}</td>
+  </tr>{% endfor %}
+</table></div></div>
+{% endblock %}

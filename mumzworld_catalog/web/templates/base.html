@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Mumzworld Catalog Generator{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="{{ url_for('index') }}">Mumzworld Catalog Generator</a>
+  <a href="{{ url_for('index') }}">Dashboard</a>
+  <a href="{{ url_for('new_ticket') }}">Create ticket</a>
+  <a href="{{ url_for('library') }}">Reference library</a>
+  <a href="{{ url_for('rules') }}">Approved rules</a>
+  <a href="{{ url_for('settings') }}">Settings</a>
+  <span style="margin-left:auto;opacity:.7;font-size:12px">{% if who %}Reviewer: {{ who }} · {% endif %}version {{ app_version }}</span>
+</header>
+<main>
+  {% for cat, msg in get_flashed_messages(with_categories=true) %}
+    <div class="flash {{ cat }}">{{ msg }}</div>
+  {% endfor %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

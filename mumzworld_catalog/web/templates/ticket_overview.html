@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_ticket_head.html" %}
+{% if meta.instructions %}<div class="callout info"><b>Ticket instructions:</b> {{ meta.instructions }}</div>{% endif %}
+
+<div class="panel">
+  <h2>Before processing: file inventory</h2>
+  <div class="stats">
+    {% for v in inv.vendor %}<div class="stat"><div class="v">{{ v.records }}</div><div class="k">records in {{ v.file }} ({{ v.skus }} distinct SKUs)</div></div>{% endfor %}
+    <div class="stat"><div class="v">{{ inv.images }}</div><div class="k">images extracted</div></div>
+    <div class="stat"><div class="v">{{ meta.files|length }}</div><div class="k">files uploaded</div></div>
+  </div>
+  {% if not inv.vendor %}<div class="callout">No vendor input file yet.</div>{% endif %}
+  {% if inv.missing_refs %}<div class="callout">Missing reference files (library or ticket): {% for k in inv.missing_refs %}{{ REF_KINDS[k] }}{% if not loop.last %}, {% endif %}{% endfor %}.
+    Processing still runs; dependent checks and exports are blocked.</div>{% endif %}
+  {% for k, e in inv.ref_errors.items() %}<div class="flash error">{{ REF_KINDS[k] }} could not be read: {{ e }}</div>{% endfor %}
+  {% for n in inv.unreadable %}<div class="flash error">Unreadable file: {{ n }}</div>{% endfor %}
+  <div class="tablewrap"><table>
+    <tr><th>Kind</th><th>File</th><th>Sheets (data rows)</th><th>Uploaded</th><th>SHA-1</th></tr>
+    {% for f in inv.files %}<tr>
+      <td>{{ kinds.get(f.kind, f.kind) }}</td>
+      <td><a href="{{ url_for('ticket_file', tid=t.id, fid=f.id) }}">{{ f.name }}</a>{% if f.images is defined %} <span class="small muted">({{ f.images|length }} image(s))</span>{% endif %}
+        {% if not f.readable %}<span class="badge b-blocker">unreadable</span> {{ f.error }}{% endif %}</td>
+      <td class="small">{% for s in f.sheets %}{{ s.name }} ({{ s.rows }}{% if s.header_row %}, header row {{ s.header_row }}{% endif %}){% if not loop.last %}; {% endif %}{% endfor %}</td>
+      <td class="small">{{ f.uploaded_at }} {{ f.by }}</td><td class="small"><code>{{ f.sha1[:10] }}</code></td>
+    </tr>{% endfor %}
+  </table></div>
+</div>
+
+{% for v in inv.vendor %}
+<form class="panel" method="post" action="{{ url_for('ticket_columns', tid=t.id) }}">
+  <h2>Column mapping: {{ v.file }}</h2>
+  {% if v.error %}<div class="flash error">{{ v.error }}</div>{% endif %}
+  <p class="muted">Proposed from the header names. Original values are kept whatever the mapping; unmapped columns stay
+    visible on each product. Sheet used: <b>{{ v.sheet }}</b>.</p>
+  <input type="hidden" name="file_id" value="{{ v.file_id }}">
+  <div class="tablewrap" style="max-height:420px"><table>
+    <tr><th>Vendor column</th><th>Internal field</th></tr>
+    {% for c in v.columns %}<tr><td>{{ c }}</td><td>
+      <select name="col::{{ c }}"><option value="">(not mapped)</option>
+        {% for f in fields %}<option value="{{ f }}" {% if v.map.get(c) == f %}selected{% endif %}>{{ labels.get(f, f) }}</option>{% endfor %}
+      </select></td></tr>{% endfor %}
+  </table></div>
+  <label>Use a different sheet (optional)</label><input type="text" name="sheet" placeholder="{{ v.sheet }}">
+  <div class="row" style="margin-top:10px">{% include "_who.html" %}<button class="secondary">Save column mapping</button></div>
+</form>
+{% endfor %}
+
+<div class="grid2">
+  <form class="panel" method="post" action="{{ url_for('ticket_process', tid=t.id) }}">
+    <h2>Process</h2>
+    <p class="muted">Normalizes the vendor data, checks the NetSuite master, links images, categorizes, maps attributes,
+      writes content, maps Magento 2 / NetSuite fields, validates, and produces the working catalog and vendor queries
+      together. Run again after any new upload: reviewer decisions, locked values and vendor answers are kept.</p>
+    {% if meta.last_run %}<p class="small">Last run {{ meta.last_run.at }}: {{ meta.last_run.records }} records,
+      {{ meta.last_run.eligible }} candidates, {{ meta.last_run.excluded }} existing excluded, {{ meta.last_run.held }} held,
+      {{ meta.last_run.validation.blocker }} blockers.{% for n in meta.last_run.notes %}<br>{{ n }}{% endfor %}</p>{% endif %}
+    <div class="row">{% include "_who.html" %}<button>{{ 'Re-process ticket' if meta.processed_at else 'Process ticket' }}</button></div>
+  </form>
+  <form class="panel" method="post" action="{{ url_for('ticket_upload', tid=t.id) }}" enctype="multipart/form-data">
+    <h2>Add files</h2>
+    <label>Kind</label>
+    {% for k, name in kinds.items() if k != 'vendor_response' %}
+      <details {% if k in ('vendor_input','images') %}open{% endif %}><summary>{{ name }}</summary>
+        <input type="file" name="file_{{ k }}" multiple></details>
+    {% endfor %}
+    <div class="row" style="margin-top:10px">{% include "_who.html" %}<button class="secondary">Upload</button></div>
+    <p class="small muted">Vendor responses go on the Responses page.</p>
+  </form>
+</div>
+
+{% if checks %}
+<div class="panel"><h2>Reference check for this ticket</h2>
+  <div class="tablewrap" style="max-height:300px"><table>{% for c in checks %}<tr><td><span class="badge b-{{ c.severity }}">{{ c.severity }}</span></td><td>{{ c.area }}</td><td>{{ c.detail }}</td></tr>{% endfor %}</table></div></div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_ticket_head.html" %}
+<div class="panel">
+  <h2>Potential new rules and lessons learned</h2>
+  <p class="muted">From reviewer corrections in this ticket and recurring findings. Nothing here is applied until it is stored
+    as a suggestion and approved on the Rules page.</p>
+  {% include "_lessons_table.html" %}
+  {% if result.observations %}<h3>Recurring patterns</h3><ul>{% for text, n in result.observations %}<li>{{ text }} ({{ n }}×)</li>{% endfor %}</ul>{% endif %}
+  <form method="post"><button class="secondary">Store rule candidates as suggestions</button></form>
+</div>
+<div class="panel">
+  <h2>References used</h2>
+  {% if not meta.refs_used %}<p class="muted">Not processed yet.</p>{% else %}
+  <table><tr><th>Kind</th><th>File</th><th>Origin</th><th>Version</th><th>SHA-1</th></tr>
+  {% for k, es in meta.refs_used.items() %}{% for e in es %}<tr><td>{{ REF_KINDS.get(k, k) }}</td><td>{{ e.name }}</td><td>{{ e.origin }}</td><td>{{ e.id }}</td><td class="small"><code>{{ e.sha1[:12] }}</code></td></tr>{% endfor %}{% endfor %}</table>{% endif %}
+</div>
+<div class="panel">
+  <h2>Ticket history</h2>
+  {% for h in meta.history|reverse %}<div class="small">{{ h.at }}{% if h.by %} · {{ h.by }}{% endif %} — {{ h.event }}</div>{% endfor %}
+  {% if meta.waivers %}<h3>Waivers</h3>{% for w in meta.waivers %}<div class="small">{{ w.at }} {{ w.by }}: {{ w.issue }} — {{ w.reason }}</div>{% endfor %}{% endif %}
+</div>
+<div class="grid2">
+  <div class="panel"><h2>Ticket package</h2><p class="muted">Everything in this workspace (uploads, references used, catalog,
+    queries, responses, outputs) as one ZIP that can be imported on another computer.</p>
+    <a class="btn secondary" href="{{ url_for('download', tid=t.id, what='package') }}">Download ticket package</a></div>
+  <form class="panel" method="post" action="{{ url_for('ticket_delete', tid=t.id) }}"><h2>Delete ticket</h2>
+    <p class="muted">Removes the workspace for good. Type the ticket number to confirm.</p>
+    <input type="text" name="confirm" placeholder="{{ meta.ticket_number }}"><p><button class="danger">Delete ticket</button></p></form>
+</div>
+{% endblock %}

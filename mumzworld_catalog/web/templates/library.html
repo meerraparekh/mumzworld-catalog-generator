@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Reference library</h1>
+<p class="muted">The latest active version of each kind is used by new processing runs (review sheets, completed tickets
+  and SOPs: every active version). A ticket can carry its own version of any kind, which then overrides the library for
+  that ticket. Every version a ticket used is copied into the ticket and listed in its reports.</p>
+<div class="grid2">
+  <form class="panel" method="post" action="{{ url_for('library_upload') }}" enctype="multipart/form-data">
+    <h2>Add a reference file</h2>
+    <label>Kind</label>
+    <select name="kind" required>
+      <option value="">Choose…</option>
+      {% for k, name in kinds.items() %}<option value="{{ k }}">{{ name }}{% if k in required %} (required){% endif %}</option>{% endfor %}
+    </select>
+    <label>File(s)</label><input type="file" name="file" multiple required>
+    <label>Version note</label><input type="text" name="note" placeholder="e.g. SOP v3.2 approved 2026-09">
+    <label>Your name</label>{% include "_who.html" %}
+    <p><button>Upload</button></p>
+  </form>
+  <div class="panel">
+    <h2>Mapping &amp; content rules workbook</h2>
+    <p class="muted">Rules that are not in a structured file yet (title structure, character limits, which template
+      column comes from which field, value equivalents) are written here so they can be applied and audited. Download
+      a starter that lists every column of the uploaded templates.</p>
+    <p><a class="btn secondary" href="{{ url_for('starter_mapping') }}">Download starter workbook</a></p>
+    <details><summary>Mapping rules</summary><table>{% for k, v in rules_help.items() %}<tr><td><code>{{ k }}</code></td><td>{{ v }}</td></tr>{% endfor %}</table></details>
+    <details><summary>Content rules</summary><table>{% for k, v in content_help.items() %}<tr><td><code>{{ k }}</code></td><td>{{ v }}</td></tr>{% endfor %}</table></details>
+    <details><summary>Internal fields</summary><p class="small">{% for f in fields %}<code>{{ f }}</code> {{ labels.get(f, '') }}; {% endfor %}
+      plus <code>category</code>, <code>title</code>, <code>short_description</code>, <code>long_description</code>, <code>bullet_points</code>, <code>attr:&lt;Attribute&gt;</code>.</p></details>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>What was found in the active files</h2>
+  <table class="kv">{% for k, name in kinds.items() %}<tr><td>{{ name }}</td><td>{{ summary.get(k, '') }}
+    {% if not lib.get(k) %}<span class="badge b-blocker">{% if k in required %}missing{% else %}not uploaded{% endif %}</span>{% endif %}
+    {% if k == 'review_sheet' and summary.get('review_sheet') %} · <a href="{{ url_for('review_lessons') }}">Analyse review decisions</a>{% endif %}</td></tr>{% endfor %}
+  </table>
+</div>
+
+<div class="panel">
+  <h2>Setup check</h2>
+  <p class="muted">Gaps and conflicts between the files. Blockers stop final exports until fixed; they are also shown on
+    each ticket's validation page.</p>
+  {% if not checks %}<p>No problems found.</p>{% else %}
+  <div class="tablewrap"><table><tr><th>Severity</th><th>Area</th><th>Detail</th></tr>
+    {% for c in checks %}<tr><td><span class="badge b-{{ c.severity }}">{{ c.severity }}</span></td><td>{{ c.area }}</td><td>{{ c.detail }}</td></tr>{% endfor %}
+  </table></div>{% endif %}
+</div>
+
+{% for k, name in kinds.items() %}
+<div class="panel" id="{{ k }}">
+  <h2>{{ name }}</h2>
+  {% set versions = lib.get(k, []) %}
+  {% if not versions %}<p class="muted">No file uploaded.</p>{% else %}
+  <table><tr><th>File</th><th>Uploaded</th><th>By</th><th>Note</th><th>SHA-1</th><th>Status</th><th></th></tr>
+  {% for v in versions|reverse %}
+    <tr><td><a href="{{ url_for('library_download', kind=k, vid=v.id) }}">{{ v.name }}</a></td><td>{{ v.uploaded_at }}</td>
+      <td>{{ v.by }}</td><td>{{ v.note }}</td><td class="small"><code>{{ v.sha1[:10] }}</code></td>
+      <td>{% if v.active %}<span class="badge b-ok">active</span>{% else %}<span class="badge b-info">inactive</span>{% endif %}</td>
+      <td><form method="post" action="{{ url_for('library_active', kind=k, vid=v.id) }}">
+        <input type="hidden" name="active" value="{{ '0' if v.active else '1' }}">
+        <button class="secondary">{{ 'Deactivate' if v.active else 'Make active' }}</button></form></td></tr>
+  {% endfor %}</table>{% endif %}
+</div>
+{% endfor %}
+{% endblock %}

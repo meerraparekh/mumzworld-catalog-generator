@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+{% if first_run %}
+<div class="panel callout info">
+  <h2>Welcome: set up the reference library first</h2>
+  <p>The app uses only the reference files you upload: SOP, approved categories, attribute dropdowns, the mapping &amp;
+    content rules workbook, the Magento 2 and NetSuite templates, the NetSuite product master and team review sheets.
+    Nothing is invented when a file is missing; the affected checks are blocked instead.</p>
+  <p><a class="btn" href="{{ url_for('library') }}">Open the reference library</a></p>
+</div>
+{% elif missing %}
+<div class="callout">Reference library incomplete: {% for k in missing %}{{ REF_KINDS[k] }}{% if not loop.last %}, {% endif %}{% endfor %}.
+  <a href="{{ url_for('library') }}">Upload them</a> (or attach ticket-specific versions to a ticket).</div>
+{% endif %}
+<div class="panel">
+  <div class="row" style="justify-content:space-between">
+    <h2>Tickets</h2>
+    <div class="row">
+      <a class="btn" href="{{ url_for('new_ticket') }}">Create ticket</a>
+      <form class="row" method="post" action="{{ url_for('import_ticket') }}" enctype="multipart/form-data">
+        <input type="file" name="package" accept=".zip" required>
+        <button class="secondary">Import ticket package</button>
+      </form>
+    </div>
+  </div>
+  {% if not tickets %}<p class="muted">No tickets yet.</p>{% else %}
+  <div class="tablewrap"><table>
+    <tr><th>Ticket</th><th>Vendor</th><th>Region</th><th>Date</th><th>State</th><th>Records</th><th>Candidates</th>
+        <th>Ready</th><th>Blocked</th><th>Open queries</th><th>Pending review</th><th>Approved</th></tr>
+    {% for tk in tickets %}{% set d = tk.dash %}
+    <tr>
+      <td><a href="{{ url_for('overview', tid=tk.id) }}">{{ tk.ticket_number }}</a></td>
+      <td>{{ tk.vendor }}</td><td>{{ tk.region }}</td><td>{{ tk.processing_date }}</td>
+      <td><span class="badge b-{{ tk.state }}">{{ tk.state|replace('_',' ') }}</span></td>
+      <td>{{ d.total }}</td><td>{{ d.candidates }}</td><td>{{ d.ready }}</td><td>{{ d.blocked }}</td>
+      <td>{{ d.open_queries }}</td><td>{{ d.unresolved_review }}</td><td>{{ d.approved }}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% endif %}
+</div>
+<div class="panel muted small">
+  States: draft → processing → awaiting vendor / awaiting review / blocked → approved → exported.
+  Work is saved on disk under the data folder, so tickets and approved rules persist between sessions. Use
+  “Ticket package” (History page) to move a ticket to another computer.
+</div>
+{% endblock %}

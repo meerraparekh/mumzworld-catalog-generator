@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<form class="panel" method="post">
+  <h1>Settings</h1>
+  <h3>Authorized reviewers</h3>
+  <p class="muted">Comma-separated names allowed to approve products, accept proposals, waive blockers, approve rules and
+    give final approval. Leave empty to allow any named reviewer (the name is always recorded).</p>
+  <input type="text" name="authorized_reviewers" value="{{ cfg.authorized_reviewers|join(', ') }}">
+  <h3>Cataloging assistant (optional)</h3>
+  <p class="muted">Uses Claude through the Anthropic API (credentials from <code>ANTHROPIC_API_KEY</code> or an
+    <code>ant auth login</code> profile). It is asked only for judgment calls — choosing among approved categories,
+    finding an equivalent approved dropdown value, drafting descriptions from vendor evidence and describing images —
+    and every answer is checked against the approved lists and marked “Cataloging judgment” for review. Requests use
+    server-side model fallbacks, so a declined request can be retried on another model. Product data is sent to the
+    API when this is on.</p>
+  <label><input type="checkbox" name="ai_enabled" value="1" {% if cfg.ai_enabled %}checked{% endif %}> Use the assistant</label>
+  <label>Model</label><input type="text" name="ai_model" value="{{ cfg.ai_model }}">
+  <label>Effort</label>
+  <select name="ai_effort">{% for e in ['low','medium','high'] %}<option {% if cfg.ai_effort == e %}selected{% endif %}>{{ e }}</option>{% endfor %}</select>
+  <h3>Mumzworld.com reference lookup</h3>
+  <p class="muted">When used, the search page is fetched and any listing links found are recorded as unreviewed
+    candidates. If the site cannot be reached, that is recorded; nothing is claimed as inspected.</p>
+  <label><input type="checkbox" name="website_lookup" value="1" {% if cfg.website_lookup %}checked{% endif %}> Show the lookup button on product pages</label>
+  <label>Search URL ({query} is replaced)</label><input type="text" name="website_search_url" value="{{ cfg.website_search_url }}">
+  <p><button>Save settings</button></p>
+</form>
+<div class="panel muted small"><b>Workflows.</b> This release implements Basic Catalog Creation for new products.
+  Planned: {{ future|join('; ') }}. Their logic is never applied to a Basic Catalog Creation ticket.</div>
+{% endblock %}

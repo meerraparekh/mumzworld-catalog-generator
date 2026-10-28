@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_ticket_head.html" %}
+<div class="panel">
+  <h2>Ticket summary</h2>
+  <div class="stats">
+    <div class="stat"><div class="v">{{ dash.total }}</div><div class="k">vendor records</div></div>
+    <div class="stat"><div class="v">{{ dash.excluded_existing }}</div><div class="k">existing products excluded</div></div>
+    <div class="stat"><div class="v">{{ dash.held }}</div><div class="k">held: possible match / conflict</div></div>
+    <div class="stat"><div class="v">{{ dash.candidates }}</div><div class="k">new product candidates</div></div>
+    <div class="stat"><div class="v">{{ dash.ready }}</div><div class="k">ready for approval</div></div>
+    <div class="stat"><div class="v">{{ dash.blocked }}</div><div class="k">blocked</div></div>
+    <div class="stat"><div class="v">{{ dash.open_queries }}</div><div class="k">outstanding vendor queries</div></div>
+    <div class="stat"><div class="v">{{ dash.unresolved_review }}</div><div class="k">unresolved review items</div></div>
+    <div class="stat"><div class="v">{{ dash.counts.blocker or 0 }} / {{ dash.counts.warning or 0 }} / {{ dash.counts.info or 0 }}</div><div class="k">blockers / warnings / info</div></div>
+    <div class="stat"><div class="v">{{ dash.approved }}</div><div class="k">products approved</div></div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>1. Approve products</h2>
+  <p class="muted">Review products one by one from the <a href="{{ url_for('catalog', tid=t.id) }}">working catalog</a>, or approve in bulk.
+    Bulk approval only offers products with no unresolved blocker; check the preview first.</p>
+  {% if not preview %}<a class="btn secondary" href="{{ url_for('review', tid=t.id, preview=1) }}">Preview bulk approval ({{ candidates|length }} product(s))</a>
+  {% else %}
+  <form method="post" action="{{ url_for('review_bulk', tid=t.id) }}">
+    <div class="tablewrap" style="max-height:360px"><table><tr><th></th><th>SKU</th><th>Title</th><th>Category</th><th>Open judgments</th></tr>
+      {% for k in candidates %}{% set p = cat.products[k] %}<tr><td><input type="checkbox" name="key" value="{{ k }}" checked></td>
+        <td><a href="{{ url_for('product', tid=t.id, key=k) }}">{{ value(p,'sku') }}</a></td><td>{{ value(p,'title') }}</td><td class="small">{{ value(p,'category') }}</td>
+        <td>{{ p.fields.values()|selectattr('status','equalto','review')|rejectattr('locked')|list|length }}</td></tr>{% endfor %}</table></div>
+    <input type="hidden" name="status" value="approved">
+    <div class="row" style="margin-top:8px">{% include "_who.html" %}<button>Approve the ticked products</button>
+      <a class="btn secondary" href="{{ url_for('review', tid=t.id) }}">Cancel</a></div>
+  </form>{% endif %}
+</div>
+
+<form class="panel" method="post" action="{{ url_for('approve', tid=t.id) }}">
+  <h2>2. Final approval</h2>
+  <p class="muted">Needs an authorized reviewer{% if cfg.authorized_reviewers %} ({{ cfg.authorized_reviewers|join(', ') }}){% endif %}, no
+    ticket-level blockers, and no unresolved blocker on any approved product. Only approved products go into the outputs.
+    Any later change to the catalog withdraws the approval.</p>
+  {% if meta.approval %}<p>Last approval: {{ meta.approval.by }} at {{ meta.approval.at }} for {{ meta.approval.products }} product(s)
+    {% if state not in ('approved', 'exported') %}<span class="badge b-warning">withdrawn by later changes</span>{% endif %}</p>{% endif %}
+  <div class="row"><input type="text" name="note" placeholder="Approval note" style="width:300px">{% include "_who.html" %}<button>Approve ticket for export</button></div>
+</form>
+
+<form class="panel" method="post" action="{{ url_for('export', tid=t.id) }}">
+  <h2>3. Export</h2>
+  <p class="muted">Writes the Magento 2 and NetSuite import files into copies of the approved templates (same sheets, column
+    names and order; no extra columns), plus the supporting reports and the working catalog.</p>
+  <div class="row">{% include "_who.html" %}<button {% if state != 'approved' and state != 'exported' %}disabled{% endif %}>Export final files</button>
+    <a class="btn secondary" href="{{ url_for('download', tid=t.id, what='reports') }}">Download draft reports</a></div>
+  {% for e in meta.exports|reverse %}
+    <h3>Export {{ e.folder }} ({{ e.at }}, {{ e.by }})</h3>
+    <ul class="files">{% for k, f in e.files.items() %}<li><a href="{{ url_for('output_file', tid=t.id, folder=e.folder, name=f.name) }}">{{ f.name }}</a>{% if f.rows is defined %} — {{ f.rows }} product(s), {{ f.columns }} columns{% if f.replaced_rows %}, {{ f.replaced_rows }} template example row(s) replaced{% endif %}{% endif %}</li>{% endfor %}</ul>
+  {% endfor %}
+</form>
+{% endblock %}

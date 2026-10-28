@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_ticket_head.html" %}
+<div class="panel">
+  <form class="row" method="get">
+    {% for f, n in [('candidates','New-item candidates'),('blocked','Blocked'),('ready','Ready'),('judgment','Judgments to review'),('approved','Approved'),('excluded','Excluded / held'),('all','All')] %}
+      <a class="btn {% if flt != f %}secondary{% endif %}" href="{{ url_for('catalog', tid=t.id, filter=f, q=q) }}">{{ n }}</a>{% endfor %}
+    <input type="hidden" name="filter" value="{{ flt }}">
+    <input type="text" name="q" value="{{ q }}" placeholder="Search any value" style="width:220px"><button class="secondary">Search</button>
+  </form>
+  <p class="small muted">{{ total }} product(s). Colour key — <span class="badge c-directly_sourced">Directly sourced</span>
+    <span class="badge c-mapped">Rule-based / mapped</span> <span class="badge c-judgment">Cataloging judgment</span>
+    <span class="badge c-manual_review">Vendor query / manual review</span> <span class="badge c-manual">Reviewer set</span></p>
+  {% if not cat.order %}<p class="muted">Not processed yet. Go to <a href="{{ url_for('overview', tid=t.id) }}">Ticket &amp; files</a> and process.</p>{% else %}
+  <form method="post" action="{{ url_for('review_bulk', tid=t.id) }}">
+  <input type="hidden" name="next" value="{{ request.full_path }}">
+  <div class="tablewrap"><table>
+    <tr><th><input type="checkbox" onclick="this.form.querySelectorAll('input[name=key]').forEach(c => c.checked = this.checked)"></th>
+      <th>SKU</th><th>Match</th><th>Category</th><th>Title</th>{% for a in attrs[:4] %}<th>{{ a }}</th>{% endfor %}<th>Images</th><th>Issues</th><th>Review</th></tr>
+    {% for k in keys %}{% set p = cat.products[k] %}{% set iss = issues_by.get(k, []) %}
+    <tr>
+      <td>{% if p.eligible %}<input type="checkbox" name="key" value="{{ k }}">{% endif %}</td>
+      <td><a href="{{ url_for('product', tid=t.id, key=k) }}">{{ value(p, 'sku') or '(no SKU)' }}</a><div class="small muted">{{ value(p, 'brand') }}</div></td>
+      <td class="small">{{ p.match.label }}{% if p.match_override %}<br><b>{{ p.match.decision }}</b>{% endif %}</td>
+      {% for f in ['category', 'title'] + attrs[:4]|map('string')|list %}{% set fk = f if f in ('category','title') else 'attr:' ~ f %}{% set d = p.fields.get(fk) %}
+        <td>{% if d %}<span class="badge c-{{ d.class }}" title="{{ CLASSES.get(d.class) }}: {{ d.reason }}">{{ CLASSES.get(d.class, d.class)[:1] }}</span>
+          <span class="clip">{{ d.value if d.value is not none else '—' }}</span>{% if d.locked %} <span class="locked">locked</span>{% endif %}{% endif %}</td>
+      {% endfor %}
+      <td>{{ p.images|selectattr('confidence', 'equalto', 'confirmed')|list|length }}{% if p.images|selectattr('confidence','equalto','uncertain')|list %} <span class="badge b-warning">?</span>{% endif %}</td>
+      <td>{% set b = iss|selectattr('severity','equalto','blocker')|rejectattr('waived')|list %}{% set w = iss|selectattr('severity','equalto','warning')|list %}
+        {% if b %}<span class="badge b-blocker">{{ b|length }} blocker</span>{% endif %} {% if w %}<span class="badge b-warning">{{ w|length }} warn</span>{% endif %}</td>
+      <td><span class="badge b-{{ p.review.status }}">{{ p.review.status }}</span></td>
+    </tr>{% endfor %}
+  </table></div>
+  <div class="row" style="margin-top:10px">{% include "_who.html" %}
+    <button name="status" value="approved">Approve selected (blocked ones are skipped)</button>
+    <button class="secondary" name="status" value="rejected">Reject selected</button>
+    <button class="secondary" name="status" value="pending">Reset to pending</button></div>
+  </form>
+  {% if pages > 1 %}<p class="row">{% for n in range(1, pages + 1) %}<a class="btn {% if n != page %}secondary{% endif %}" href="{{ url_for('catalog', tid=t.id, filter=flt, q=q, page=n) }}">{{ n }}</a>{% endfor %}</p>{% endif %}
+  {% endif %}
+</div>
+{% endblock %}

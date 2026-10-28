@@ -1,0 +1,26 @@
+<div class="row" style="justify-content:space-between">
+  <div>
+    <h1>Ticket {{ meta.ticket_number }} <span class="badge b-{{ meta.state }}">{{ meta.state|replace('_',' ') }}</span></h1>
+    <div class="muted">{{ meta.vendor }} · {{ meta.region or 'region not set' }} · processing date {{ meta.processing_date }} · Basic Catalog Creation</div>
+  </div>
+  <div class="row">
+    <a class="btn secondary" href="{{ url_for('download', tid=t.id, what='working') }}">Working catalog .xlsx</a>
+    <a class="btn secondary" href="{{ url_for('download', tid=t.id, what='queries') }}">Vendor queries .xlsx</a>
+  </div>
+</div>
+<nav class="stepper wide">
+  {% for page, name in stages %}
+    <a class="step {% if page == stage %}current{% endif %}" href="{{ url_for(page if page not in ('queries','responses','validation') else page ~ '_page', tid=t.id) }}">
+      <div class="t">{{ name }}</div>
+      <div class="n">
+        {% if page == 'catalog' %}{{ dash.candidates }} candidates · {{ dash.blocked }} blocked
+        {% elif page == 'queries' %}{{ dash.open_queries }} outstanding
+        {% elif page == 'validation' %}{{ dash.counts.blocker or 0 }} blockers · {{ dash.counts.warning or 0 }} warnings
+        {% elif page == 'review' %}{{ dash.approved }} approved
+        {% elif page == 'overview' %}{{ meta.files|length }} files
+        {% elif page == 'responses' %}{{ meta.responses|length }} imported
+        {% else %}&nbsp;{% endif %}
+      </div>
+    </a>
+  {% endfor %}
+</nav>

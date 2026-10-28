@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<form class="panel" method="post" action="{{ url_for('create_ticket') }}" enctype="multipart/form-data">
+  <h1>Create ticket</h1>
+  <div class="grid2">
+    <div>
+      <label>Ticket number</label><input type="text" name="ticket_number" required>
+      <label>Vendor name</label><input type="text" name="vendor" required>
+      <label>Target region / marketplace</label><input type="text" name="region" placeholder="e.g. UAE, KSA">
+      <label>Processing date</label><input type="text" name="processing_date" value="{{ today }}">
+      <label>Workflow</label>
+      <select name="workflow">{% for k, v in workflows.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
+      <p class="small muted">Planned workflows (not yet available): {{ future|join('; ') }}.</p>
+      <label>Ticket-specific instructions</label><textarea name="instructions" style="font-family:inherit;font-size:14px"></textarea>
+      <label>Your name</label>{% include "_who.html" %}
+    </div>
+    <div>
+      <p class="muted">All uploads are stored unchanged. Several files per kind are allowed, and more can be added later.
+        Reference files attached here override the library for this ticket only.</p>
+      {% for k, name in kinds.items() if k != 'vendor_response' %}
+        <label>{{ name }}{% if k == 'vendor_input' %} <span class="badge b-blocker">required</span>{% endif %}</label>
+        <input type="file" name="file_{{ k }}" multiple {% if k == 'images' %}accept=".zip,.jpg,.jpeg,.png,.webp,.gif,.tif,.tiff,.bmp"{% endif %}>
+      {% endfor %}
+    </div>
+  </div>
+  <p><button>Create ticket</button></p>
+</form>
+{% endblock %}

@@ -1,0 +1,11 @@
+<div class="panel">{% if not result.lessons %}<p class="muted">No lessons found.</p>{% else %}
+<div class="tablewrap"><table>
+  <tr><th>Classification</th><th>Field</th><th>From</th><th>To</th><th>Scope</th><th>Examples</th><th>Note</th></tr>
+  {% for x in result.lessons %}<tr>
+    <td><span class="badge b-{{ 'ok' if x.classification in ('general','category','brand') else 'review' }}">{{ x.classification|replace('_',' ') }}</span></td>
+    <td>{{ label(x.field) }}</td><td>{{ x.from }}</td><td>{{ x.to }}</td>
+    <td>{% for k, v in x.scope.items() if v %}{{ k }}: {{ v }} {% endfor %}</td>
+    <td class="small">{% for e in x.examples[:4] %}{{ e.file }} row {{ e.row }}{% if e.comment %}: {{ e.comment }}{% endif %}<br>{% endfor %}</td>
+    <td class="small">{{ x.note }}{% if x.unapproved %} {{ x.unapproved }} unapproved example(s) ignored.{% endif %}{% if x.content %} Content correction: kept as an example, not a value rule.{% endif %}</td>
+  </tr>{% endfor %}
+</table></div>{% endif %}</div>
